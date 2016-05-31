@@ -1,7 +1,8 @@
 import socket
 import sys
 import os
-import pickle
+from command_file import CommandFile
+from thread_decorator import thread
 
 
 class Client:
@@ -10,11 +11,15 @@ class Client:
         # host = 'localhost'
         self.port = 2000
         self.socket_obj = None
+        self.bin_buff_size = 1024
+        self.num_buff_size = 16
         os.chdir(os.environ['USERPROFILE'])
         self.name_log_file = 'win_auto_installer.log'
         self.log_file = open(self.name_log_file, 'w')
         self.start_connection()
-        self.get_installer()
+        start = b'START'
+        if self.socket_obj.recv(len(start)):
+            self.get_installer()
         
     def start_connection(self):
         self.socket_obj = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -25,51 +30,63 @@ class Client:
                 break
             except ConnectionRefusedError:
                 pass
-        
+            except TimeoutError:
+                pass
+
     def get_installer(self):
-        bin_buff_size = 1024
-        num_buff_size = 16
-        num_size = int(self.socket_obj.recv(num_buff_size).decode(), num_buff_size)
-        installers_count = int(self.socket_obj.recv(num_size).decode())
-        for i in range(installers_count):
-            num_size = int(self.socket_obj.recv(num_buff_size).decode(), num_buff_size)
-            installer_desc = self.socket_obj.recv(num_size)
-            print(installer_desc)
-            print(len(installer_desc))
-            installer_desc = pickle.loads(installer_desc)
-            name = installer_desc[0] + '.exe'
-            argv = installer_desc[1]
-            installer = open(name, 'wb')
-            installer_size = int(self.socket_obj.recv(num_buff_size).decode(), num_buff_size)
-            for i in range(installer_size // bin_buff_size):
-                installer_part = self.socket_obj.recv(bin_buff_size)
-                installer.write(installer_part)
-                diff = bin_buff_size - len(installer_part)
-                while diff:
-                    installer_part = self.socket_obj.recv(diff)
-                    installer.write(installer_part)
-                    diff -= len(installer_part)
-            installer_part = self.socket_obj.recv(installer_size % bin_buff_size)
-            installer.write(installer_part)
-            installer.close()
-            self.add_to_log_file(name + ' ' + argv)
-            self.add_to_log_file('Installing... ')
-            c = os.popen(name + ' ' + argv)
-            self.add_to_log_file('Installing done.\n')
+        self.add_to_log_file('Start preparing to installation')
+        self.add_to_log_file('Loading service data... ')
+        installers_name = self.get_bin_file(CommandFile()).pickle_loads_data()
+        self.add_to_log_file('Service data downloaded')
+        for installer_name in installers_name:
+            self.add_to_log_file('Loading %s... ' % installer_name)
+            self.get_bin_file(open(installer_name, 'wb'))
+            self.add_to_log_file('%s downloaded' % installer_name)
+        self.add_to_log_file('Loading installation scripts... ')
+        installers_scripts = self.get_bin_file(CommandFile()).pickle_loads_data()
+        self.add_to_log_file('Installation scripts downloaded')
+        self.add_to_log_file('Preparing to installation done')
+        self.add_to_log_file('Start installation')
+        for installer_name in installers_scripts:
+            self.add_to_log_file('Installing %s... ' % installer_name)
+            self.add_to_log_file('%s' % installers_scripts[installer_name])
+            os.popen(installers_scripts[installer_name])
+            self.add_to_log_file('%s installed.' % installer_name)
         self.add_to_log_file('All programs installed.')
-        self.log_file.close()
-        self.send_log_file()
+        self.add_to_log_file('END')
         self.socket_obj.close()
+        for installer_name in installers_name:
+            os.remove(installer_name)
+
+    def get_bin_file(self, file_):
+        installer_size = int(self.socket_obj.recv(self.num_buff_size).decode(), self.num_buff_size)
+        for i in range(installer_size // self.bin_buff_size):
+            installer_part = self.socket_obj.recv(self.bin_buff_size)
+            file_.write(installer_part)
+            self.update_progress(len(installer_part))
+            diff = self.bin_buff_size - len(installer_part)
+            while diff:
+                installer_part = self.socket_obj.recv(diff)
+                file_.write(installer_part)
+                self.update_progress(len(installer_part))
+                diff -= len(installer_part)
+        installer_part = self.socket_obj.recv(installer_size % self.bin_buff_size)
+        file_.write(installer_part)
+        self.update_progress(len(installer_part))
+        file_.close()
+        return file_
+
+    def update_progress(self, size_get_part):
+        self.send_data(str(size_get_part).encode())
+
+    def send_data(self, data):
+        self.socket_obj.send('{:016x}'.format(len(data)).encode())
+        self.socket_obj.send(data)
 
     def add_to_log_file(self, text):
         print(text)
-        self.log_file.write(text + '\n')
-
-    def send_log_file(self):
-        self.log_file = open(self.name_log_file, 'rb')
-        installer_size = os.path.getsize(self.name_log_file)
-        self.socket_obj.send('{:016x}'.format(installer_size).encode())
-        self.socket_obj.send(self.log_file.read())
+        message = text.encode() + b'\n'
+        self.send_data(message)
 
 if __name__ == '__main__':
     if len(sys.argv) > 1:
