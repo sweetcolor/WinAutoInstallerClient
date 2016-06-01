@@ -1,8 +1,9 @@
-import socket
-import sys
 import os
+import socket
+import subprocess
+import sys
+
 from command_file import CommandFile
-from thread_decorator import thread
 
 
 class Client:
@@ -49,8 +50,9 @@ class Client:
         self.add_to_log_file('Start installation')
         for installer_name in installers_scripts:
             self.add_to_log_file('Installing %s... ' % installer_name)
-            self.add_to_log_file('%s' % installers_scripts[installer_name])
-            os.popen(installers_scripts[installer_name])
+            self.add_to_log_file('%s' % ' '.join(installers_scripts[installer_name]))
+            process = subprocess.Popen(installers_scripts[installer_name])
+            process.wait()
             self.add_to_log_file('%s installed.' % installer_name)
         self.add_to_log_file('All programs installed.')
         self.add_to_log_file('END')
